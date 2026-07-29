@@ -7,6 +7,15 @@ use wgpu_types::{Extent3d, TextureDimension, TextureFormat};
 
 use crate::{FontSmoothing, GlyphAtlasInfo, GlyphAtlasLocation, TextError};
 
+const GLYPH_ATLAS_PADDING: u32 = 2;
+
+fn containing_atlas_size(glyph_max_size: u32) -> u32 {
+    glyph_max_size
+        .saturating_add(GLYPH_ATLAS_PADDING * 2)
+        .next_power_of_two()
+        .max(512)
+}
+
 /// Key identifying a glyph
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct GlyphCacheKey {
@@ -59,7 +68,10 @@ impl FontAtlas {
         Self {
             texture_atlas: TextureAtlasLayout::new_empty(size),
             glyph_to_atlas_index: HashMap::default(),
-            dynamic_texture_atlas_builder: DynamicTextureAtlasBuilder::new(size, 2),
+            dynamic_texture_atlas_builder: DynamicTextureAtlasBuilder::new(
+                size,
+                GLYPH_ATLAS_PADDING,
+            ),
             texture,
         }
     }
@@ -157,8 +169,9 @@ pub fn add_glyph_to_atlas(
             .size
             .height
             .max(glyph_texture.width());
-        // Pick the higher of 512 or the smallest power of 2 greater than glyph_max_size
-        let containing = (1u32 << (32 - glyph_max_size.leading_zeros())).max(512);
+        // Pick the higher of 512 or the smallest power of 2 that contains the
+        // glyph and the atlas padding on both edges.
+        let containing = containing_atlas_size(glyph_max_size);
 
         let mut new_atlas = FontAtlas::new(textures, UVec2::splat(containing), font_smoothing);
 
@@ -264,4 +277,14 @@ pub fn get_glyph_atlas_info(
                 is_alpha_mask: location.is_alpha_mask,
             })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn containing_atlas_size_accounts_for_padding_at_power_of_two_boundary() {
+        assert_eq!(containing_atlas_size(1021), 2048);
+    }
 }
