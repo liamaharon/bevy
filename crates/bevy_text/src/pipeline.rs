@@ -606,7 +606,11 @@ impl TextMeasureInfo {
         // Note that this arbitrarily adjusts the buffer layout. We assume the buffer is always 'refreshed'
         // whenever a canonical state is required.
         let layout = &mut computed.layout;
-        layout.break_all_lines(bounds.width);
+        // UI layout rounds a node's width to whole pixels after measuring it,
+        // and the text is then laid out at the rounded width. Measuring at
+        // the floored width keeps a line that fits the unrounded width by a
+        // fraction of a pixel from wrapping into a box sized for one line.
+        layout.break_all_lines(bounds.width.map(f32::floor));
         layout.align(Alignment::Start, AlignmentOptions::default());
         buffer_dimensions(layout)
     }
