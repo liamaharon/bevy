@@ -24,7 +24,7 @@ use bevy_shader::{
 use bevy_tasks::Task;
 use bevy_utils::default;
 use core::{future::Future, mem};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Mutex, OnceLock, PoisonError};
 use wgpu::{PipelineCompilationOptions, VertexBufferLayout as RawVertexBufferLayout};
 
 /// A pipeline defining the data layout and shader logic for a specific GPU task.
@@ -539,7 +539,7 @@ impl PipelineCache {
                     zero_initialize_workgroup_memory: descriptor.zero_initialize_workgroup_memory,
                 };
 
-                let descriptor = RawRenderPipelineDescriptor {
+                let raw_descriptor = RawRenderPipelineDescriptor {
                     multiview_mask: None,
                     depth_stencil: descriptor.depth_stencil.clone(),
                     label: descriptor.label.as_deref(),
@@ -565,9 +565,13 @@ impl PipelineCache {
                     cache: None,
                 };
 
-                Ok(Pipeline::RenderPipeline(
-                    device.create_render_pipeline(&descriptor),
-                ))
+                let fragment_shader = descriptor.fragment.as_ref().map(|f| &f.shader);
+                let vertex_shader = &descriptor.vertex.shader;
+                let label = descriptor.label.as_deref();
+                notify_compile_observer(false, id, label, vertex_shader, fragment_shader);
+                let pipeline = device.create_render_pipeline(&raw_descriptor);
+                notify_compile_observer(true, id, label, vertex_shader, fragment_shader);
+                Ok(Pipeline::RenderPipeline(pipeline))
             },
             self.synchronous_pipeline_compilation,
         )
@@ -609,7 +613,7 @@ impl PipelineCache {
 
                 drop((shader_cache, layout_cache));
 
-                let descriptor = RawComputePipelineDescriptor {
+                let raw_descriptor = RawComputePipelineDescriptor {
                     label: descriptor.label.as_deref(),
                     layout: layout.as_ref().map(|layout| -> &PipelineLayout { layout }),
                     module: &compute_module,
@@ -623,9 +627,11 @@ impl PipelineCache {
                     cache: None,
                 };
 
-                Ok(Pipeline::ComputePipeline(
-                    device.create_compute_pipeline(&descriptor),
-                ))
+                let label = descriptor.label.as_deref();
+                notify_compile_observer(false, id, label, &descriptor.shader, None);
+                let pipeline = device.create_compute_pipeline(&raw_descriptor);
+                notify_compile_observer(true, id, label, &descriptor.shader, None);
+                Ok(Pipeline::ComputePipeline(pipeline))
             },
             self.synchronous_pipeline_compilation,
         )
@@ -799,6 +805,36 @@ fn pipeline_error_context(cached_pipeline: &CachedPipeline) -> String {
         PipelineDescriptor::ComputePipelineDescriptor(desc) => {
             format(&desc.shader, &desc.entry_point, &desc.shader_defs)
         }
+    }
+}
+
+/// Called on the compiling thread just before (`finished` false) and after a
+/// pipeline goes to the driver, with its id, label and shaders.
+pub type PipelineCompileObserver = fn(
+    finished: bool,
+    id: CachedPipelineId,
+    label: Option<&str>,
+    shader: &Handle<Shader>,
+    second_shader: Option<&Handle<Shader>>,
+);
+
+static PIPELINE_COMPILE_OBSERVER: OnceLock<PipelineCompileObserver> = OnceLock::new();
+
+/// Sets the observer, to name the pipeline in a crash inside the driver. Only the
+/// first call has an effect.
+pub fn set_pipeline_compile_observer(observer: PipelineCompileObserver) {
+    let _ = PIPELINE_COMPILE_OBSERVER.set(observer);
+}
+
+fn notify_compile_observer(
+    finished: bool,
+    id: CachedPipelineId,
+    label: Option<&str>,
+    shader: &Handle<Shader>,
+    second_shader: Option<&Handle<Shader>>,
+) {
+    if let Some(observer) = PIPELINE_COMPILE_OBSERVER.get() {
+        observer(finished, id, label, shader, second_shader);
     }
 }
 
