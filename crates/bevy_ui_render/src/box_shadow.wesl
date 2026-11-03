@@ -34,11 +34,10 @@ fn erf(p: vec2<f32>) -> vec2<f32> {
 }
 
 fn horizontalRoundedBoxShadow(x: f32, y: f32, blur: f32, radius: vec2<f32>, half_size: vec2<f32>) -> f32 {
-    var c = half_size.x;
-    if 0.0 < min(radius.x, radius.y) {
-        let d = min(half_size.y - radius.y - abs(y), 0.);
-        c = half_size.x - radius.x + radius.x * sqrt(max(0., 1. - d * d / (radius.y * radius.y)));
-    }
+    // Circular corners only, as in `sd_rounded_box`.
+    let corner = radius.x;
+    let d = min(half_size.y - corner - abs(y), 0.);
+    let c = half_size.x - corner + sqrt(max(0., corner * corner - d * d));
     let integral = 0.5 + 0.5 * erf((x + vec2(-c, c)) * (sqrt(0.5) / blur));
     return integral.y - integral.x;
 }

@@ -105,19 +105,15 @@ fn sd_rounded_box(
     corner_radii_x: vec4<f32>,
     corner_radii_y: vec4<f32>,
 ) -> f32 {
-    let radius = select_corner_radius(point, corner_radii_x, corner_radii_y);
-    // Vector from the corner closest to the point, to the point.
+    // Circular corners only: `corner_radii_y` is ignored, so elliptical radii draw wrongly.
+    // The elliptical distance costs 5-11% of the whole frame's GPU time on an iPhone 11.
+    let rs = select(corner_radii_x.xy, corner_radii_x.wz, 0.0 < point.y);
+    let radius = select(rs.x, rs.y, 0.0 < point.x);
     let corner_to_point = abs(point) - 0.5 * size;
-    let straight_distance = max(corner_to_point.x, corner_to_point.y);
-    if min(radius.x, radius.y) <= 0.0 {
-        return straight_distance;
-    }
-    // Vector from the center of the corner ellipse to the point.
     let q = corner_to_point + radius;
-    let edge_distance = max(q.x - radius.x, q.y - radius.y);
-    let inv_radii_sq = 1.0 / (radius * radius);
-    let corner_distance = distance_to_ellipse_approx(q, inv_radii_sq, 1.0);
-    return select(edge_distance, corner_distance, q.x > 0.0 && q.y > 0.0);
+    let l = length(max(q, vec2(0.0)));
+    let m = min(max(q.x, q.y), 0.0);
+    return l + m - radius;
 }
 
 fn sd_inset_rounded_box(
@@ -130,35 +126,15 @@ fn sd_inset_rounded_box(
     let inner_size = size - inset.xy - inset.zw;
     let inner_center = inset.xy + 0.5 * inner_size - 0.5 * size;
     let inner_point = point - inner_center;
-
-    var rx = radius_x;
-    var ry = radius_y;
-
-    // Top left corner.
-    rx.x = rx.x - inset.x;
-    ry.x = ry.x - inset.y;
-
-    // Top right corner.
-    rx.y = rx.y - inset.z;
-    ry.y = ry.y - inset.y;
-
-    // Bottom right corner.
-    rx.z = rx.z - inset.z;
-    ry.z = ry.z - inset.w;
-
-    // Bottom left corner.
-    rx.w = rx.w - inset.x;
-    ry.w = ry.w - inset.w;
-
+    var r = radius_x;
+    r.x = r.x - max(inset.x, inset.y);
+    r.y = r.y - max(inset.z, inset.y);
+    r.z = r.z - max(inset.z, inset.w);
+    r.w = r.w - max(inset.x, inset.w);
     let half_size = inner_size * 0.5;
-
-    rx = min(max(rx, vec4(0.0)), vec4<f32>(half_size.x));
-    ry = min(max(ry, vec4(0.0)), vec4<f32>(half_size.y));
-    let is_zero_radius = min(rx, ry) <= vec4(0.0);
-    rx = select(rx, vec4(0.0), is_zero_radius);
-    ry = select(ry, vec4(0.0), is_zero_radius);
-
-    return sd_rounded_box(inner_point, inner_size, rx, ry);
+    let min_size = min(half_size.x, half_size.y);
+    r = min(max(r, vec4(0.0)), vec4<f32>(min_size));
+    return sd_rounded_box(inner_point, inner_size, r, r);
 }
 
 fn nearest_border_active(point_vs_mid: vec2<f32>, size: vec2<f32>, width: vec4<f32>, flags: u32) -> bool {
