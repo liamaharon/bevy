@@ -24,8 +24,7 @@ struct VertexOutput {
     @location(2) @interpolate(flat) size: vec2<f32>,
     @location(3) @interpolate(flat) flags: u32,
     @location(4) @interpolate(flat) radius_x: vec4<f32>,
-    @location(5) @interpolate(flat) radius_y: vec4<f32>,
-    @location(6) @interpolate(flat) border: vec4<f32>,
+    @location(5) @interpolate(flat) border: vec4<f32>,
 
     /// Position relative to the center of the rectangle.
     @location(7) point: vec2<f32>,
@@ -54,7 +53,6 @@ fn vertex(
     out.color = vertex_color;
     out.flags = flags;
     out.radius_x = radius_x;
-    out.radius_y = radius_y;
     out.size = size;
     out.border = border;
     out.point = point;
@@ -236,9 +234,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let color = select(in.color, in.color * texture_color, enabled(in.flags, TEXTURED));
 
     if enabled(in.flags, BORDER_ANY) {
-        return draw_uinode_border(color, in.point, in.size, in.radius_x, in.radius_y, in.border, in.flags);
+        return draw_uinode_border(color, in.point, in.size, in.radius_x, in.radius_x, in.border, in.flags);
     } else {
-        return draw_uinode_background(color, in.point, in.size, in.radius_x, in.radius_y, in.border, in.flags);
+        return draw_uinode_background(color, in.point, in.size, in.radius_x, in.radius_x, in.border, in.flags);
     }
 }
 

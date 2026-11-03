@@ -1,8 +1,5 @@
 import bevy_render::view::View;
 import bevy_render::globals::Globals;
-import package::ui::{
-    select_corner_radius
-};
 
 const PI: f32 = 3.14159265358979323846;
 const SAMPLES: u32 = constants::SHADOW_SAMPLES;
@@ -15,13 +12,9 @@ struct BoxShadowVertexOutput {
     @location(1) color: vec4<f32>,
     @location(2) @interpolate(flat) size: vec2<f32>,
     @location(3) @interpolate(flat) radius_x: vec4<f32>,
-    @location(4) @interpolate(flat) radius_y: vec4<f32>,
-    @location(5) @interpolate(flat) blur: f32,
+    @location(4) @interpolate(flat) blur: f32,
 }
 
-fn gaussian(x: f32, sigma: f32) -> f32 {
-    return exp(-(x * x) / (2. * sigma * sigma)) / (sqrt(2. * PI) * sigma);
-}
 
 /// Approximates the Gauss error function: https://en.wikipedia.org/wiki/Error_function
 fn erf(p: vec2<f32>) -> vec2<f32> {
@@ -33,12 +26,11 @@ fn erf(p: vec2<f32>) -> vec2<f32> {
     return s - s / (result * result);
 }
 
-fn horizontalRoundedBoxShadow(x: f32, y: f32, blur: f32, radius: vec2<f32>, half_size: vec2<f32>) -> f32 {
-    // Circular corners only, as in `sd_rounded_box`.
-    let corner = radius.x;
+// Circular corners only, as in `sd_rounded_box`.
+fn horizontalRoundedBoxShadow(x: f32, y: f32, erf_scale: f32, corner: f32, half_size: vec2<f32>) -> f32 {
     let d = min(half_size.y - corner - abs(y), 0.);
     let c = half_size.x - corner + sqrt(max(0., corner * corner - d * d));
-    let integral = 0.5 + 0.5 * erf((x + vec2(-c, c)) * (sqrt(0.5) / blur));
+    let integral = 0.5 + 0.5 * erf((x + vec2(-c, c)) * erf_scale);
     return integral.y - integral.x;
 }
 
@@ -48,7 +40,6 @@ fn roundedBoxShadow(
     point: vec2<f32>,
     blur: f32,
     corners_x: vec4<f32>,
-    corners_y: vec4<f32>,
 ) -> f32 {
     let center = (lower + upper) * 0.5;
     let half_size = (upper - lower) * 0.5;
@@ -60,12 +51,15 @@ fn roundedBoxShadow(
     let step = (end - start) / f32(SAMPLES);
     var y = start + step * 0.5;
     var value: f32 = 0.0;
+    let rs = select(corners_x.xy, corners_x.wz, 0.0 < p.y);
+    let corner = select(rs.x, rs.y, 0.0 < p.x);
+    let erf_scale = sqrt(0.5) / blur;
+    let exp_scale = 1.0 / (2. * blur * blur);
     for (var i: u32 = 0; i < SAMPLES; i++) {
-        let corner = select_corner_radius(p, corners_x, corners_y);
-        value += horizontalRoundedBoxShadow(p.x, p.y - y, blur, corner, half_size) * gaussian(y, blur) * step;
+        value += horizontalRoundedBoxShadow(p.x, p.y - y, erf_scale, corner, half_size) * exp(-(y * y) * exp_scale);
         y += step;
     }
-    return value;
+    return value * step / (sqrt(2. * PI) * blur);
 }
 
 @vertex
@@ -85,7 +79,6 @@ fn vertex(
     out.color = vertex_color;
     out.size = size;
     out.radius_x = radius_x;
-    out.radius_y = radius_y;
     out.blur = blur;
     return out;
 }
@@ -94,6 +87,6 @@ fn vertex(
 fn fragment(
     in: BoxShadowVertexOutput,
 ) -> @location(0) vec4<f32> {
-    let g = in.color.a * roundedBoxShadow(-0.5 * in.size, 0.5 * in.size, in.point, max(in.blur, 0.01), in.radius_x, in.radius_y);
+    let g = in.color.a * roundedBoxShadow(-0.5 * in.size, 0.5 * in.size, in.point, max(in.blur, 0.01), in.radius_x);
     return vec4(in.color.rgb, g);
 }

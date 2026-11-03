@@ -2011,6 +2011,35 @@ impl Default for UiMeta {
     }
 }
 
+/// The four strips around a border's hole, as quads centred on the node: nothing inside the
+/// hole is coloured, so shading it is wasted. `None` when the node is too small to have one.
+fn border_strips(
+    size: Vec2,
+    border: &BorderRect,
+    radius: &ResolvedBorderRadius,
+) -> Option<[[Vec2; 4]; 4]> {
+    // The extra pixel is the inner edge's anti-aliasing.
+    let left = border.min_inset.x.max(radius.top_left.x).max(radius.bottom_left.x) + 1.;
+    let right = border.max_inset.x.max(radius.top_right.x).max(radius.bottom_right.x) + 1.;
+    let top = border.min_inset.y.max(radius.top_left.y).max(radius.top_right.y) + 1.;
+    let bottom = border.max_inset.y.max(radius.bottom_left.y).max(radius.bottom_right.y) + 1.;
+    if left + right >= size.x || top + bottom >= size.y {
+        return None;
+    }
+    let half = size * 0.5;
+    let hole_min = Vec2::new(left, top) - half;
+    let hole_max = half - Vec2::new(right, bottom);
+    let quad = |min: Vec2, max: Vec2| {
+        [min, Vec2::new(max.x, min.y), max, Vec2::new(min.x, max.y)]
+    };
+    Some([
+        quad(-half, Vec2::new(half.x, hole_min.y)),
+        quad(Vec2::new(-half.x, hole_max.y), half),
+        quad(Vec2::new(-half.x, hole_min.y), Vec2::new(hole_min.x, hole_max.y)),
+        quad(Vec2::new(hole_max.x, hole_min.y), Vec2::new(half.x, hole_max.y)),
+    ])
+}
+
 pub(crate) const QUAD_VERTEX_POSITIONS: [Vec2; 4] = [
     Vec2::new(-0.5, -0.5),
     Vec2::new(0.5, -0.5),
@@ -2262,7 +2291,6 @@ pub fn prepare_uinodes(
 
                         // Specify the corners of the node
                         let points = QUAD_VERTEX_POSITIONS.map(|pos| pos * rect_size);
-                        let positions = points.map(|pos| transform.transform_point2(pos));
 
                         let uvs = if flags == shader_flags::UNTEXTURED {
                             [Vec2::ZERO, Vec2::X, Vec2::ONE, Vec2::Y]
@@ -2301,46 +2329,68 @@ pub fn prepare_uinodes(
                             _ => {}
                         }
 
-                        let vertices = clip_polygon(
-                            extracted_uinode.clip.as_ref(),
-                            &[
-                                (positions[0], (uvs[0], points[0])),
-                                (positions[1], (uvs[1], points[1])),
-                                (positions[2], (uvs[2], points[2])),
-                                (positions[3], (uvs[3], points[3])),
-                            ],
-                            |a, b, t| (a.0.lerp(b.0, t), a.1.lerp(b.1, t)),
-                        );
-                        if vertices.is_empty() {
+                        let strips = (matches!(*node_type, NodeType::Border(_))
+                            && flags & shader_flags::TEXTURED == 0)
+                            .then(|| border_strips(rect_size, border, border_radius))
+                            .flatten();
+                        let quads: &[[Vec2; 4]] = match &strips {
+                            Some(strips) => strips,
+                            None => core::slice::from_ref(&points),
+                        };
+
+                        let mut drew_any = false;
+                        for quad in quads {
+                            let quad_uvs = if strips.is_some() {
+                                quad.map(|point| point / rect_size + 0.5)
+                            } else {
+                                uvs
+                            };
+                            let quad_positions = quad.map(|point| transform.transform_point2(point));
+                            let vertices = clip_polygon(
+                                extracted_uinode.clip.as_ref(),
+                                &[
+                                    (quad_positions[0], (quad_uvs[0], quad[0])),
+                                    (quad_positions[1], (quad_uvs[1], quad[1])),
+                                    (quad_positions[2], (quad_uvs[2], quad[2])),
+                                    (quad_positions[3], (quad_uvs[3], quad[3])),
+                                ],
+                                |a, b, t| (a.0.lerp(b.0, t), a.1.lerp(b.1, t)),
+                            );
+                            if vertices.is_empty() {
+                                continue;
+                            }
+                            drew_any = true;
+
+                            for &(position, (uv, point)) in &vertices {
+                                ui_meta.vertices.push(UiVertex {
+                                    position: position.extend(0.).into(),
+                                    uv: uv.into(),
+                                    color,
+                                    flags,
+                                    radius: (*border_radius).into(),
+                                    border: [
+                                        border.min_inset.x,
+                                        border.min_inset.y,
+                                        border.max_inset.x,
+                                        border.max_inset.y,
+                                    ],
+                                    size: rect_size.into(),
+                                    point: point.into(),
+                                });
+                            }
+
+                            for i in 1..vertices.len() as u32 - 1 {
+                                ui_meta.indices.push(indices_index);
+                                ui_meta.indices.push(indices_index + i);
+                                ui_meta.indices.push(indices_index + i + 1);
+                            }
+
+                            vertices_index += 3 * (vertices.len() as u32 - 2);
+                            indices_index += vertices.len() as u32;
+                        }
+                        if !drew_any {
                             continue;
                         }
-
-                        for &(position, (uv, point)) in &vertices {
-                            ui_meta.vertices.push(UiVertex {
-                                position: position.extend(0.).into(),
-                                uv: uv.into(),
-                                color,
-                                flags,
-                                radius: (*border_radius).into(),
-                                border: [
-                                    border.min_inset.x,
-                                    border.min_inset.y,
-                                    border.max_inset.x,
-                                    border.max_inset.y,
-                                ],
-                                size: rect_size.into(),
-                                point: point.into(),
-                            });
-                        }
-
-                        for i in 1..vertices.len() as u32 - 1 {
-                            ui_meta.indices.push(indices_index);
-                            ui_meta.indices.push(indices_index + i);
-                            ui_meta.indices.push(indices_index + i + 1);
-                        }
-
-                        vertices_index += 3 * (vertices.len() as u32 - 2);
-                        indices_index += vertices.len() as u32;
                     }
                     ExtractedUiItem::Glyphs { glyphs } => {
                         let image = gpu_images
